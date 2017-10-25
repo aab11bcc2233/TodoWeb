@@ -124,7 +124,7 @@ public class SingleApplicationVerticle extends AbstractVerticle {
     }
 
     private void handleGetAll(RoutingContext context) {
-        
+
     }
 
     private void handleCreateTodo(RoutingContext context) {
