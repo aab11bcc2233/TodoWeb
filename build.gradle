@@ -3,19 +3,37 @@ version '1.0-SNAPSHOT'
 
 apply plugin: 'java'
 
-repositories {
-    mavenCentral()
+jar {
+    // by default fat jar
+    archiveName = 'todo-web-fat.jar'
+    from { configurations.compile.collect { it.isDirectory() ? it : zipTree(it) } }
+    manifest {
+        attributes 'Main-Class': 'io.vertx.core.Launcher'
+        attributes 'Main-Verticle': 'com.madao.verticles.SingleApplicationVerticle'
+    }
 }
 
-task annotationProcessing(type: JavaCompile, group: 'build') {
+repositories {
+    mavenCentral()
+    mavenLocal()
+}
+
+task annotationProcessing(type: JavaCompile, group: 'build') { // codegen
     source = sourceSets.main.java
     classpath = configurations.compile + configurations.compileOnly
     destinationDir = project.file('src/main/generated')
     options.compilerArgs = [
             "-proc:only",
             "-processor", "io.vertx.codegen.CodeGenProcessor",
-            "-Acodegen.output=${destinationDir.absolutePath}"
+            "-AoutputDirectory=${project.projectDir}/src/main"
     ]
+}
+
+compileJava {
+    targetCompatibility = 1.8
+    sourceCompatibility = 1.8
+
+    dependsOn annotationProcessing
 }
 
 sourceSets {
@@ -24,13 +42,6 @@ sourceSets {
             srcDirs += 'src/main/generated'
         }
     }
-}
-
-compileJava {
-    targetCompatibility = 1.8
-    sourceCompatibility = 1.8
-
-    dependsOn annotationProcessing
 }
 
 dependencies {

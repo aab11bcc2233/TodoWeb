@@ -7,6 +7,7 @@ import io.vertx.core.AbstractVerticle;
 import io.vertx.core.Future;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.json.DecodeException;
 import io.vertx.core.json.Json;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
@@ -17,6 +18,7 @@ import io.vertx.redis.RedisOptions;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public class SingleApplicationVerticle extends AbstractVerticle {
     private static final String HTTP_HOST = "0.0.0.0";
@@ -124,23 +126,126 @@ public class SingleApplicationVerticle extends AbstractVerticle {
     }
 
     private void handleGetAll(RoutingContext context) {
+        redis.hvals(Constants.REDIS_TODO_KEY, res -> {
+            if (res.succeeded()) {
+                String encoded = Json.encodePrettily(
+                        res.result()
+                                .stream()
+                                .map(x -> new Todo((String) x))
+                                .collect(Collectors.toList())
+                );
 
+                context.response()
+                        .putHeader("content-type", "application/json;charset=utf8")
+                        .end(encoded);
+
+            } else {
+                sendError(503, context.response());
+            }
+        });
     }
 
     private void handleCreateTodo(RoutingContext context) {
+        try {
+            final Todo todo = wrapObject(new Todo(context.getBodyAsString()), context);
+            final String encoded = Json.encodePrettily(todo);
 
+            redis.hset(
+                    Constants.REDIS_TODO_KEY,
+                    String.valueOf(todo.getId()),
+                    encoded,
+                    res -> {
+                        if (res.succeeded()) {
+                            context.response()
+                                    .setStatusCode(201)
+                                    .putHeader("content-type", "application/json;charset=utf8")
+                                    .end(encoded);
+                        } else {
+                            sendError(503, context.response());
+                        }
+                    });
+        } catch (DecodeException e) {
+            sendError(400, context.response());
+        }
     }
 
     private void handleUpdateTodo(RoutingContext context) {
+        try {
+            @Nullable String todoId = context.request().getParam("todoId");
+            final Todo newTodo = new Todo(context.getBodyAsString());
 
+            if (todoId == null || newTodo == null) {
+                sendError(400, context.response());
+                return;
+            }
+
+            redis.hget(
+                    Constants.REDIS_TODO_KEY,
+                    todoId,
+                    x -> {
+                        if (x.succeeded()) {
+                            String result = x.result();
+                            if (result == null) {
+                                sendError(404, context.response());
+                            } else {
+                                Todo oldTodo = new Todo(result);
+                                String response = Json.encodePrettily(oldTodo.merge(newTodo));
+
+                                redis.hset(
+                                        Constants.REDIS_TODO_KEY,
+                                        todoId,
+                                        response,
+                                        res -> {
+                                            if (res.succeeded()) {
+                                                context.response()
+                                                        .putHeader("content-type", "application/json;charset=utf8")
+                                                        .end(response);
+                                            }
+                                        });
+                            }
+                        } else {
+                            sendError(503, context.response());
+                        }
+                    });
+        } catch (DecodeException e) {
+            sendError(400, context.response());
+        }
     }
 
     private void handleDeleteOne(RoutingContext context) {
-
+        String todoId = context.request().getParam("todoId");
+        redis.hdel(
+                Constants.REDIS_TODO_KEY,
+                todoId,
+                res -> {
+                    if (res.succeeded())
+                        context.response().setStatusCode(204).end();
+                    else
+                        sendError(503, context.response());
+                });
     }
 
     private void handleDeleteAll(RoutingContext context) {
+        redis.del(
+                Constants.REDIS_TODO_KEY,
+                res -> {
+                    if (res.succeeded())
+                        context.response().setStatusCode(204).end();
+                    else
+                        sendError(503, context.response());
+                });
+    }
 
+    private Todo wrapObject(Todo todo, RoutingContext context) {
+        int id = todo.getId();
+        if (id > Todo.getIncId()) {
+            Todo.setIncIdWith(id);
+        } else if (id == 0) {
+            todo.setIncId();
+        }
+
+        todo.setUrl(context.request().absoluteURI() + "/" + todo.getId());
+        return todo;
     }
 
     private void sendError(int statusCode, HttpServerResponse response) {
