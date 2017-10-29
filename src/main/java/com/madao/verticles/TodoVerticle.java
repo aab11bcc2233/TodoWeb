@@ -2,11 +2,17 @@ package com.madao.verticles;
 
 import com.madao.Constants;
 import com.madao.entity.Todo;
+import com.madao.service.RedisTodoService;
 import com.madao.service.TodoService;
+import io.vertx.codegen.annotations.Nullable;
 import io.vertx.core.AbstractVerticle;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.core.http.HttpServerResponse;
+import io.vertx.core.json.DecodeException;
+import io.vertx.core.json.Json;
 import io.vertx.ext.web.Router;
 import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
@@ -15,6 +21,7 @@ import io.vertx.redis.RedisOptions;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Consumer;
 
 public class TodoVerticle extends AbstractVerticle {
     private static final String HOST = "0.0.0.0";
@@ -33,7 +40,7 @@ public class TodoVerticle extends AbstractVerticle {
                         .setHost(config().getString("redis.host", "127.0.0.1"))
                         .setPort(config().getInteger("redis.port", 6379));
 
-                service = new ReidsTodoService(vertx, config);
+                service = new RedisTodoService(vertx, config);
                 break;
         }
 
@@ -49,6 +56,8 @@ public class TodoVerticle extends AbstractVerticle {
 
     @Override
     public void start(Future<Void> future) throws Exception {
+        initData();
+
         Router router = Router.router(vertx);
 
         Set<String> allowHeaders = new HashSet<>();
@@ -92,28 +101,129 @@ public class TodoVerticle extends AbstractVerticle {
                         });
     }
 
-    private void handleGetTodo(RoutingContext context) {
+    private <T> Handler<AsyncResult<T>> resultHandler(RoutingContext context, Consumer<T> consumer) {
+        return res -> {
+            if (res.succeeded()) {
+                consumer.accept(res.result());
+            } else {
+                serviceUnavailable(context);
+            }
+        };
+    }
 
+    private void handleGetTodo(RoutingContext context) {
+        @Nullable String todoId = context.request().getParam("todoId");
+        if (todoId == null) {
+            sendError(404, context.response());
+            return;
+        }
+
+        service.getCertain(todoId).setHandler(
+                resultHandler(context, res -> {
+                    if (!res.isPresent()) {
+                        notFound(context);
+                    } else {
+                        final String encoded = Json.encode(res.get());
+                        context.response()
+                                .putHeader(Constants.KEY_CONTENT_TYPE, Constants.VALUE_CONTENT_TYPE)
+                                .end(encoded);
+                    }
+                })
+        );
     }
 
     private void handleGetAll(RoutingContext context) {
-
+        service.getAll().setHandler(
+                resultHandler(context, res -> {
+                    if (res == null) {
+                        serviceUnavailable(context);
+                    } else {
+                        final String encoded = Json.encodePrettily(res);
+                        context.response()
+                                .putHeader(Constants.KEY_CONTENT_TYPE, Constants.VALUE_CONTENT_TYPE)
+                                .end(encoded);
+                    }
+                })
+        );
     }
 
     private void handleCreateTodo(RoutingContext context) {
+        try {
+            final Todo todo = writeObject(new Todo(context.getBodyAsJson()), context);
+            final String encoded = Json.encodePrettily(todo);
 
+            service.insert(todo).setHandler(
+                    resultHandler(context, res -> {
+                        if (res) {
+                            context.response()
+                                    .setStatusCode(201)
+                                    .putHeader("content-type", "application/json;charset=utf8")
+                                    .end(encoded);
+                        } else {
+                            serviceUnavailable(context);
+                        }
+                    })
+            );
+        } catch (DecodeException e) {
+            sendError(400, context.response());
+        }
     }
 
     private void handleUpdateTodo(RoutingContext context) {
+        try {
+            @Nullable String todoId = context.request().getParam("todoId");
+            final Todo newTodo = new Todo(context.getBodyAsString());
 
+            if (todoId == null) {
+                sendError(404, context.response());
+                return;
+            }
+
+            service.update(todoId, newTodo).setHandler(
+                    resultHandler(context, res -> {
+                        if (res == null) {
+                            notFound(context);
+                        } else {
+                            final String encoded = Json.encodePrettily(res);
+                            context.response()
+                                    .putHeader(Constants.KEY_CONTENT_TYPE, Constants.VALUE_CONTENT_TYPE)
+                                    .end(encoded);
+                        }
+                    })
+            );
+        } catch (DecodeException e) {
+            badRequest(context);
+        }
+
+    }
+
+    private Handler<AsyncResult<Boolean>> deleteResultHandler(RoutingContext context) {
+        return res -> {
+            if (res.succeeded()) {
+                if (res.result()) {
+                    context.response().setStatusCode(204).end();
+                } else {
+                    serviceUnavailable(context);
+                }
+            } else {
+                serviceUnavailable(context);
+            }
+        };
     }
 
     private void handleDeleteOne(RoutingContext context) {
+        @Nullable String todoId = context.request().getParam("todoId");
+        if (todoId == null) {
+            sendError(404, context.response());
+            return;
+        }
 
+        service.delete(todoId).setHandler(deleteResultHandler(context));
     }
 
     private void handleDeleteAll(RoutingContext context) {
-
+        service.deleteAll()
+                .setHandler(deleteResultHandler(context));
     }
 
     private void sendError(int statusCode, HttpServerResponse response) {
@@ -126,6 +236,10 @@ public class TodoVerticle extends AbstractVerticle {
 
     private void notFound(RoutingContext context) {
         context.response().setStatusCode(404).end();
+    }
+
+    private void serviceUnavailable(RoutingContext context) {
+        context.response().setStatusCode(503).end();
     }
 
     private Todo writeObject(Todo todo, RoutingContext context) {

@@ -4,6 +4,9 @@ public final class Constants {
 
     public static final String REDIS_TODO_KEY = "VERT_TODO";
 
+    public static final String KEY_CONTENT_TYPE = "content-type";
+    public static final String VALUE_CONTENT_TYPE = "application/json;charset=utf8e";
+
     private Constants() {}
 
     public static final String API_GET = "/todos/:todoId";
