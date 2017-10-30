@@ -1,6 +1,5 @@
-.gradle/
-build/
-.idea/
-out/
-src/test/
-.vertx/
+/.gradle/
+/.idea/
+/.vertx/
+/out/
+/build/
