@@ -2,6 +2,7 @@ package com.madao.verticles;
 
 import com.madao.Constants;
 import com.madao.entity.Todo;
+import com.madao.service.JdbcTodoService;
 import com.madao.service.RedisTodoService;
 import com.madao.service.TodoService;
 import io.vertx.codegen.annotations.Nullable;
